@@ -1,4 +1,4 @@
-# starmap-service
+# Starmap Service
 
 A long-running Python service that generates **star charts** (maps of the night sky) on demand
 and serves them to a Telegram bot over **MQTT**.
@@ -8,6 +8,29 @@ Heavy astronomical catalogs are loaded once at startup and kept available; each 
 is rendered into a PNG and sent back to the bot.
 
 Rendering is powered by [**starplot**](https://github.com/steveberardi/starplot).
+
+[![Checks](https://github.com/miksrv/starmap-service/actions/workflows/check.yml/badge.svg)](https://github.com/miksrv/starmap-service/actions/workflows/check.yml)
+
+---
+
+## Table of contents
+
+- [Why this exists](#why-this-exists)
+- [How it works with the Telegram bot](#how-it-works-with-the-telegram-bot)
+- [MQTT API (contract with the bot)](#mqtt-api-contract-with-the-bot)
+  - [Topics](#topics)
+  - [At a glance](#at-a-glance)
+- [Chart types (`map_type`)](#chart-types-map_type)
+- [Project layout](#project-layout)
+- [Configuration](#configuration)
+  - [Environment variables](#environment-variables)
+- [Data catalogs](#data-catalogs)
+- [Running](#running)
+  - [Option A — Docker (local development / testing on macOS)](#option-a--docker-local-development--testing-on-macos)
+  - [Option B — Raspberry Pi (production, no Docker)](#option-b--raspberry-pi-production-no-docker)
+- [Operational notes](#operational-notes)
+- [Requirements](#requirements)
+- [Related](#related)
 
 ---
 
