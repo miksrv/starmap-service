@@ -1,0 +1,27 @@
+[tool.black]
+line-length = 120
+target-version = ["py311"]
+
+[tool.isort]
+profile = "black"
+line_length = 120
+
+[tool.pylint.format]
+max-line-length = 120
+
+[tool.pylint."messages control"]
+disable = [
+    "C0114",  # missing-module-docstring
+    "C0115",  # missing-class-docstring
+    "C0116",  # missing-function-docstring
+    "R0903",  # too-few-public-methods
+    "W0611",  # unused-import
+    "W0212",  # protected-access (the service exposes its internals for testing)
+    "R0911",  # too-many-return-branches (parse/validation is naturally branchy)
+]
+
+[tool.pylint.main]
+fail-under = 7.0
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
