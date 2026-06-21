@@ -1,0 +1,8 @@
+starplot==0.20.4
+matplotlib
+numpy
+astropy
+pytz
+paho-mqtt<2.0
+PyYAML
+python-dotenv
