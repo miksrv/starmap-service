@@ -1,0 +1,203 @@
+"""Tests for the pure, deterministic helpers in src.renderer.
+
+These never perform a real render (no catalog data needed): they cover optic
+construction, target resolution, resolution parsing, the direction table and
+map-type dispatch.
+"""
+
+import pytest
+
+from src import renderer as rmod
+from src.errors import ValidationError
+from src.renderer import Renderer
+from src.request import RenderRequest
+
+
+def _req(map_type="full", target=None, optic=None, options=None):
+    return RenderRequest(
+        request_id="rid",
+        map_type=map_type,
+        dt=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+        lat=55.0,
+        lon=37.0,
+        target=target or {},
+        optic=optic or {},
+        options=options or {},
+    )
+
+
+# ---------------------------------------------------------------------------
+# _build_optic
+# ---------------------------------------------------------------------------
+def test_build_binoculars():
+    optic = Renderer._build_optic({"type": "binoculars", "magnification": 10, "fov": 5})
+    assert isinstance(optic, rmod.Binoculars)
+
+
+@pytest.mark.parametrize(
+    "otype,cls_name",
+    [
+        ("telescope", "Scope"),
+        ("scope", "Scope"),
+        ("generic", "Scope"),
+        ("refractor", "Refractor"),
+        ("reflector", "Reflector"),
+    ],
+)
+def test_build_scope_family(otype, cls_name):
+    optic = Renderer._build_optic(
+        {
+            "type": otype,
+            "focal_length": 1000,
+            "eyepiece_focal_length": 25,
+            "eyepiece_fov": 50,
+        }
+    )
+    assert type(optic).__name__ == cls_name
+
+
+def test_build_camera():
+    optic = Renderer._build_optic(
+        {
+            "type": "camera",
+            "sensor_height": 24,
+            "sensor_width": 36,
+            "lens_focal_length": 50,
+        }
+    )
+    assert isinstance(optic, rmod.Camera)
+
+
+def test_build_camera_rotation_optional():
+    # rotation omitted must not raise (defaults to 0)
+    optic = Renderer._build_optic({"type": "camera", "sensor_height": 1, "sensor_width": 1, "lens_focal_length": 1})
+    assert isinstance(optic, rmod.Camera)
+
+
+def test_build_optic_unknown_type():
+    with pytest.raises(ValidationError) as exc:
+        Renderer._build_optic({"type": "kaleidoscope"})
+    assert "unknown optic.type" in str(exc.value)
+
+
+def test_build_optic_missing_required_field():
+    with pytest.raises(ValidationError) as exc:
+        Renderer._build_optic({"type": "binoculars", "magnification": 10})
+    assert "fov" in str(exc.value)
+
+
+def test_build_optic_non_numeric_field():
+    with pytest.raises(ValidationError) as exc:
+        Renderer._build_optic({"type": "binoculars", "magnification": "ten", "fov": 5})
+    assert "must be a number" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# _target_radec
+# ---------------------------------------------------------------------------
+def test_target_radec_from_coords():
+    ra, dec = Renderer._target_radec(_req(target={"ra": 10.5, "dec": 41.2}))
+    assert ra == pytest.approx(10.5)
+    assert dec == pytest.approx(41.2)
+
+
+def test_target_radec_non_numeric():
+    with pytest.raises(ValidationError) as exc:
+        Renderer._target_radec(_req(target={"ra": "x", "dec": "y"}))
+    assert "must be numbers" in str(exc.value)
+
+
+def test_target_radec_object_name_not_supported():
+    with pytest.raises(ValidationError) as exc:
+        Renderer._target_radec(_req(target={"object": "M31"}))
+    assert "object-name lookup is not supported" in str(exc.value)
+
+
+def test_target_radec_empty():
+    with pytest.raises(ValidationError):
+        Renderer._target_radec(_req(target={}))
+
+
+# ---------------------------------------------------------------------------
+# _resolution_for
+# ---------------------------------------------------------------------------
+def test_resolution_from_options():
+    assert Renderer._resolution_for(_req(options={"resolution": 1500})) == 1500
+
+
+def test_resolution_default_when_absent():
+    from src import config
+
+    assert Renderer._resolution_for(_req()) == config.RESOLUTION
+
+
+def test_resolution_invalid_falls_back():
+    from src import config
+
+    assert Renderer._resolution_for(_req(options={"resolution": "big"})) == config.RESOLUTION
+
+
+# ---------------------------------------------------------------------------
+# Direction table
+# ---------------------------------------------------------------------------
+def test_direction_table_has_eight_points():
+    assert set(rmod._DIRECTION_AZIMUTH) == {"N", "NE", "E", "SE", "S", "SW", "W", "NW"}
+    assert rmod._DIRECTION_AZIMUTH["S"] == 180
+    assert rmod._DIRECTION_AZIMUTH["N"] == 0
+
+
+# ---------------------------------------------------------------------------
+# _dso_label
+# ---------------------------------------------------------------------------
+class _DSO:
+    def __init__(self, common_names=None, ngc=None, ic=None, name="anon"):
+        self.common_names = common_names or []
+        self.ngc = ngc
+        self.ic = ic
+        self.name = name
+
+
+def test_dso_label_prefers_common_name():
+    assert rmod._dso_label(_DSO(common_names=["Andromeda"], ngc="224")) == "Andromeda"
+
+
+def test_dso_label_falls_back_to_ngc():
+    assert rmod._dso_label(_DSO(ngc="7000")) == "7000"
+
+
+def test_dso_label_falls_back_to_ic():
+    assert rmod._dso_label(_DSO(ic="434")) == "IC434"
+
+
+def test_dso_label_falls_back_to_name():
+    assert rmod._dso_label(_DSO(name="weird")) == "weird"
+
+
+# ---------------------------------------------------------------------------
+# Dispatch
+# ---------------------------------------------------------------------------
+def test_render_dispatches_by_map_type(monkeypatch):
+    r = Renderer()
+    called = {}
+
+    def _stub(_mt):
+        def _render(_req_arg):
+            called["hit"] = _mt
+            return b"png"
+
+        return _render
+
+    for mt in ("full", "zenith", "horizon", "galactic", "optic"):
+        monkeypatch.setattr(r, f"_render_{mt}", _stub(mt))
+    for mt in ("full", "zenith", "horizon", "galactic", "optic"):
+        called.clear()
+        assert r.render(_req(map_type=mt)) == b"png"
+        assert called["hit"] == mt
+
+
+def test_render_unknown_map_type_raises(monkeypatch):
+    r = Renderer()
+    bogus = _req()
+    bogus.map_type = "teleport"
+    with pytest.raises(NotImplementedError):
+        r.render(bogus)
