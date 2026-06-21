@@ -1,0 +1,12 @@
+.git
+.idea
+.venv
+venv
+__pycache__
+*.pyc
+.DS_Store
+output
+map_big.png
+.env
+# data is mounted as a volume, not copied into the image
+data
