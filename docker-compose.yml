@@ -1,0 +1,39 @@
+# Local development / testing on macOS.
+# Brings up a throwaway MQTT broker plus the service so you can test the full
+# request/response flow with mosquitto_pub / mosquitto_sub against localhost:1883.
+#
+# Deployment on the Raspberry Pi does NOT use Docker — see scripts/install.sh.
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: starmap_mosquitto
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    restart: unless-stopped
+
+  starmap:
+    build: .
+    container_name: starmap_service
+    depends_on:
+      - mosquitto
+    environment:
+      - MPLBACKEND=Agg
+      - MQTT_BROKER=mosquitto
+      - MQTT_PORT=1883
+    volumes:
+      # Live source for local development (edit + `docker compose restart starmap`).
+      - ./src:/app/src
+      - ./main.py:/app/main.py
+      # starplot data catalogs (~85 MB) — mounted, not baked into the image.
+      - ./data:/app/data
+      # Config mounted separately so it can be edited without rebuilding.
+      - ./config/config.yaml:/app/config/config.yaml
+      # Generated charts (when output.mode = file).
+      - ./output:/app/output
+      # Test client (run via `docker compose exec starmap python scripts/send_request.py`).
+      - ./scripts:/app/scripts:ro
+    restart: unless-stopped
+    command: python main.py

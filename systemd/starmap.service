@@ -1,0 +1,20 @@
+[Unit]
+Description=Starmap Service — sky chart generator (MQTT)
+After=network-online.target mosquitto.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# __USER__ and __WORKDIR__ are filled in by scripts/install.sh
+User=__USER__
+WorkingDirectory=__WORKDIR__
+Environment=MPLBACKEND=Agg
+Environment=PYTHONPATH=__WORKDIR__
+ExecStart=__WORKDIR__/venv/bin/python main.py
+Restart=always
+RestartSec=10
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target
