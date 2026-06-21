@@ -1,0 +1,30 @@
+# starmap-service — runtime configuration
+#
+# These are the default values. Environment variables take precedence over this
+# file (see .env.example). In Docker this file is mounted separately, so it can
+# be edited without rebuilding the image.
+
+mqtt:
+  broker: localhost        # override with MQTT_BROKER env var
+  port: 1883               # override with MQTT_PORT env var
+  keepalive: 60
+
+render:
+  resolution: 2600         # output image width in px (lower = faster/lighter; Pi-friendly)
+  default_map_type: full   # used when a request omits map_type (full | horizon | zenith)
+  style: BLUE_NIGHT        # starplot theme name (e.g. BLUE_NIGHT, GRAYSCALE, ANTIQUE)
+  star_magnitude_limit: 6  # plot stars brighter than this magnitude
+  language:                # starplot UI language, e.g. "ru" (leave empty until verified)
+
+queue:
+  max_size: 10             # max render requests waiting in line (the one rendering is not counted); extra requests are rejected with "queue full" (0 = unbounded)
+
+output:
+  mode: file               # file (write PNG, reply with path — default) | base64 (inline; small charts only — large maps exceed the MQTT packet limit)
+  dir: output              # used when mode = file; relative to project root
+  retention:               # file mode only: keep the output dir from growing without bound
+    max_files: 50          # keep at most this many PNGs (0 = unlimited)
+    max_age_hours: 24      # delete PNGs older than this (0 = no age limit)
+
+logging:
+  level: INFO
