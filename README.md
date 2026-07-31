@@ -22,6 +22,7 @@ Rendering is powered by [**starplot**](https://github.com/steveberardi/starplot)
   - [Topics](#topics)
   - [At a glance](#at-a-glance)
 - [Chart types (`map_type`)](#chart-types-map_type)
+- [Example charts](#example-charts)
 - [Project layout](#project-layout)
 - [Requirements](#requirements)
 - [Running](#running)
@@ -142,6 +143,18 @@ Notes:
   coordinates is not implemented yet (tracked in `ROADMAP.md`). If the target is below the horizon
   at the given time/place, or the field of view is too wide (> 20°), the service replies with an
   `error`.
+
+---
+
+## Example charts
+
+| `full` | `galactic` |
+|:---:|:---:|
+| [![full](docs/full.png)](docs/full.png) | [![galactic](docs/galactic.png)](docs/galactic.png) |
+
+| `zenith` | `horizon` |
+|:---:|:---:|
+| [![zenith](docs/zenith.png)](docs/zenith.png) | [![horizon](docs/horizon.png)](docs/horizon.png) |
 
 ---
 
