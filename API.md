@@ -41,7 +41,7 @@ older callers.
     "datetime": "2026-06-17T22:00:00"
   },
 
-  "target": { "object": "M31" },
+  "target": { "ra": 10.68, "dec": 41.27 },
 
   "optic": { "type": "binoculars", "magnification": 10, "fov": 65 },
 
@@ -57,8 +57,8 @@ older callers.
 | `map_type`              | string | chart type (see below); defaults to `render.default_map_type`       |
 | `observer.lat` / `.lon` | number | observer coordinates in degrees; required for `zenith`/`horizon`/`optic` |
 | `observer.datetime`     | string | ISO 8601; **defaults to the service's current system time**         |
-| `target.object`         | string | object to center on (e.g. `M31`, `Jupiter`); for `optic`            |
-| `target.ra` / `.dec`    | number | alternative to `target.object`, in degrees                          |
+| `target.ra` / `.dec`    | number | target coordinates in degrees; **required** for `optic`             |
+| `target.object`         | string | *(not implemented yet)* object name (e.g. `M31`); currently rejected — use `ra`/`dec` |
 | `optic.type`            | string | `binoculars` / `telescope` / `refractor` / `reflector` / `camera`   |
 | `options.*`             | object | optional per-request overrides of `config.yaml` (style, resolution…)|
 
@@ -200,7 +200,7 @@ Any problem — validation, queue full, or an unexpected render failure — is r
 | Coordinates required but missing                       | `map_type 'zenith' requires observer coordinates (observer.lat …)` |
 | Coordinates not numeric / out of range                 | `observer.lat must be between -90 and 90`                          |
 | Bad datetime format                                    | `datetime must be ISO 8601, e.g. 2026-06-17T22:00:00`              |
-| `optic` without a target                               | `map_type 'optic' requires a target ('object' name or 'ra'+'dec')` |
+| `optic` without a target (or only `target.object`)     | `map_type 'optic' requires target.ra and target.dec (degrees); object-name lookup is not supported yet` |
 | `optic` without an optic definition                    | `map_type 'optic' requires an 'optic' definition …`                |
 | `optic` with an unknown optic type or missing field    | `unknown optic.type 'x'…` / `optic.fov is required for optic.type…`|
 | `optic` target below the horizon at the given time     | `Target is below horizon at specified time/location.`              |

@@ -4,12 +4,13 @@ A long-running Python service that generates **star charts** (maps of the night 
 and serves them to a Telegram bot over **MQTT**.
 
 It is built to run on Linux — primarily a **Raspberry Pi** — as a standalone, always-on process.
-Heavy astronomical catalogs are loaded once at startup and kept available; each incoming request
+Heavy astronomical catalogs are loaded once at startup and kept in memory; each incoming request
 is rendered into a PNG and sent back to the bot.
 
 Rendering is powered by [**starplot**](https://github.com/steveberardi/starplot).
 
 [![Checks](https://github.com/miksrv/starmap-service/actions/workflows/check.yml/badge.svg)](https://github.com/miksrv/starmap-service/actions/workflows/check.yml)
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=miksrv_starmap-service&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=miksrv_starmap-service)
 
 ---
 
@@ -22,15 +23,18 @@ Rendering is powered by [**starplot**](https://github.com/steveberardi/starplot)
   - [At a glance](#at-a-glance)
 - [Chart types (`map_type`)](#chart-types-map_type)
 - [Project layout](#project-layout)
-- [Configuration](#configuration)
-  - [Environment variables](#environment-variables)
-- [Data catalogs](#data-catalogs)
+- [Requirements](#requirements)
 - [Running](#running)
   - [Option A — Docker (local development / testing on macOS)](#option-a--docker-local-development--testing-on-macos)
   - [Option B — Raspberry Pi (production, no Docker)](#option-b--raspberry-pi-production-no-docker)
+- [Configuration](#configuration)
+  - [Environment variables](#environment-variables)
+- [Data catalogs](#data-catalogs)
 - [Operational notes](#operational-notes)
-- [Requirements](#requirements)
+- [Troubleshooting](#troubleshooting)
+- [Development & Testing](#development--testing)
 - [Related](#related)
+- [License](#license)
 
 ---
 
@@ -70,15 +74,15 @@ The companion bot lives in a separate repository:
    PNG chart
 ```
 
-1. A user triggers a command in the Telegram bot.
+1. A user triggers a command in the Telegram bot (`/sky`, `/horizon`, `/skymap`, `/galaxy`).
 2. The bot publishes a JSON request to `starmap/command` with a unique `request_id` and the
-   observer's location/time/chart type. (The bot already implements this request/response pattern
-   with `register_request`, reused from its `/photo` flow.)
+   observer's location/time/chart type.
 3. The service acknowledges the request with a `queued` reply, then renders the chart (one at a
    time, in order) and publishes the result to `starmap/result` — both with the **same**
    `request_id`, so the bot can match the replies to the original request.
 4. The service publishes its status (`online`/`offline`) to `starmap/status` so the bot can tell
-   the user when the service is down instead of timing out.
+   the user when the service is down instead of timing out, and can hide the star-chart commands
+   from its `/` menu while the service is offline.
 
 Both processes typically run on the same Raspberry Pi alongside the MQTT broker (Mosquitto).
 
@@ -120,20 +124,24 @@ See [`API.md`](API.md) for the complete field tables, the optic definitions, and
 
 ## Chart types (`map_type`)
 
-| Type       | Status         | Description                                                   |
-|------------|----------------|---------------------------------------------------------------|
-| `full`     | ✅ implemented | all-sky RA/DEC map (stars, constellations, DSOs, Milky Way…)  |
-| `galactic` | ✅ implemented | all-sky map in galactic coordinates (Mollweide)               |
-| `zenith`   | ✅ implemented | the dome of sky overhead from the observer (with horizon circle) |
-| `horizon`  | ✅ implemented | sky above the horizon, centered on a compass direction        |
-| `optic`    | ✅ implemented | how a target looks through a given optic (telescope/binoculars/camera) |
+| Type       | Description                                                            | Required input |
+|------------|--------------------------------------------------------------------------|----------------|
+| `full`     | all-sky RA/DEC map (stars, constellations, DSOs, Milky Way…)           | —              |
+| `galactic` | all-sky map in galactic coordinates (Mollweide)                        | —              |
+| `zenith`   | the dome of sky overhead from the observer (with horizon circle)       | `observer`     |
+| `horizon`  | sky above the horizon, centered on a compass direction                 | `observer`     |
+| `optic`    | how a target looks through a given optic (telescope/binoculars/camera) | `observer`, `target`, `optic` |
+
+All five chart types are implemented.
 
 Notes:
 - `horizon` accepts `options.direction` (one of `N, NE, E, SE, S, SW, W, NW`; default `S`) to
   choose which 180°-wide swath of the horizon to show.
-- `optic` currently requires explicit `target.ra` / `target.dec` (degrees); resolving an object
-  name like `M31` to coordinates is not wired up yet. If the target is below the horizon at the
-  given time/place, or the field of view is too wide (> 20°), the service replies with an `error`.
+- `optic` currently requires explicit `target.ra` / `target.dec` (degrees) — a request with only
+  `target.object` (e.g. `M31`) is rejected at validation time, since resolving an object name to
+  coordinates is not implemented yet (tracked in `ROADMAP.md`). If the target is below the horizon
+  at the given time/place, or the field of view is too wide (> 20°), the service replies with an
+  `error`.
 
 ---
 
@@ -154,8 +162,127 @@ config/
   mosquitto.conf         # throwaway broker config for local testing
 data/                    # starplot catalogs (downloaded; not committed) — see data/README.md
 systemd/starmap.service  # unit template (filled in by install.sh)
-scripts/                 # install / start / stop / restart / fetch-data
+scripts/                 # install / start / stop / restart / fetch-data / send_request (test client)
+tests/                   # pytest suite (config, request parsing, errors, renderer, storage, service)
 Dockerfile, docker-compose.yml
+```
+
+---
+
+## Requirements
+
+- Python 3.10–3.13 (CI and tooling target 3.11)
+- An MQTT broker (Mosquitto) reachable by both the bot and the service
+- See `requirements.txt` (starplot, matplotlib, numpy, astropy, pytz, paho-mqtt, PyYAML,
+  python-dotenv)
+- _(optional)_ The companion bot: [miksrv/telegram-ai-bot](https://github.com/miksrv/telegram-ai-bot)
+  — this service runs standalone and doesn't require it to be present
+
+---
+
+## Running
+
+### Option A — Docker (local development / testing on macOS)
+
+Docker is for local testing only. It brings up a throwaway Mosquitto broker plus the service, so
+you can exercise the full request/response flow.
+
+```bash
+docker compose up --build
+```
+
+This starts:
+- `starmap_mosquitto` — an MQTT broker on `localhost:1883`;
+- `starmap_service` — the renderer, connected to that broker.
+
+`config/config.yaml` and `data/` are mounted as volumes (so you can edit config and keep catalogs
+without rebuilding the image).
+
+Test it end-to-end from another terminal. Either the bundled test client:
+
+```bash
+python scripts/send_request.py --map-type full --lat 55.75 --lon 37.62 --out chart.png
+```
+
+or raw `mosquitto-clients`:
+
+```bash
+# Watch results and status
+mosquitto_sub -h localhost -t 'starmap/result' -t 'starmap/status' -v
+
+# Send a render request
+mosquitto_pub -h localhost -t starmap/command \
+  -m '{"request_id":"1","lat":55.75,"lon":37.62,"map_type":"full"}'
+```
+
+> On an Intel Mac the Linux container needs the `linux_amd64` DuckDB extension; starplot downloads
+> it into the mounted `data/` on first use. On Apple Silicon the bundled `linux_arm64` build is used.
+
+### Option B — Raspberry Pi (production, no Docker)
+
+Deployment on the Pi does **not** use Docker. The service runs under systemd.
+
+```bash
+git clone https://github.com/miksrv/starmap-service.git
+cd starmap-service
+bash scripts/install.sh
+```
+
+`install.sh` will:
+
+1. create a virtual environment in `venv/`;
+2. install dependencies from `requirements.txt`;
+3. download starplot catalogs into `data/` if they are missing (`scripts/fetch-data.sh`);
+4. create the output directory (used when `output.mode = file`);
+5. install the systemd unit (`/etc/systemd/system/starmap.service`), filling in the current user
+   and project path (`systemd/starmap.service` is the template — `__USER__` / `__WORKDIR__`);
+6. enable and start the service.
+
+The installed unit sets `Restart=always`, `MPLBACKEND=Agg` (headless rendering), and
+`PYTHONPATH=<project dir>`:
+
+```ini
+[Unit]
+Description=Starmap Service — sky chart generator (MQTT)
+After=network-online.target mosquitto.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__WORKDIR__
+Environment=MPLBACKEND=Agg
+Environment=PYTHONPATH=__WORKDIR__
+ExecStart=__WORKDIR__/venv/bin/python main.py
+Restart=always
+RestartSec=10
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Manage it with:
+
+```bash
+bash scripts/start.sh      # start + enable autostart on boot
+bash scripts/stop.sh       # stop + disable autostart
+bash scripts/restart.sh    # restart (e.g. after a code update)
+
+journalctl -u starmap.service -f   # follow logs
+```
+
+So the service comes back after a crash or reboot — and the MQTT status correctly reflects
+whether it is alive.
+
+**Updating on the Pi:**
+
+```bash
+bash scripts/stop.sh
+git pull
+venv/bin/pip install -r requirements.txt
+bash scripts/start.sh
 ```
 
 ---
@@ -164,7 +291,7 @@ Dockerfile, docker-compose.yml
 
 Defaults live in `config/config.yaml`. **Environment variables override the file**, which is handy
 for Docker and systemd. In Docker the file is mounted separately so it can be edited without
-rebuilding the image.
+rebuilding the image. Copy `.env.example` to `.env` for local overrides.
 
 ```yaml
 mqtt:
@@ -199,18 +326,16 @@ than `max_age_hours`. Pruning never interrupts a request — failures are only l
 
 ### Environment variables
 
-| Variable               | Overrides                | Notes                                            |
-|------------------------|--------------------------|--------------------------------------------------|
-| `MQTT_BROKER`          | `mqtt.broker`            | broker host                                      |
-| `MQTT_PORT`            | `mqtt.port`              | broker port                                      |
-| `STARMAP_RESOLUTION`   | `render.resolution`      | output width in px                               |
-| `STARMAP_QUEUE_MAX_SIZE`| `queue.max_size`        | max requests waiting in line (0 = unbounded)     |
-| `STARMAP_OUTPUT_MODE`  | `output.mode`            | `base64` or `file`                               |
-| `LOG_LEVEL`            | `logging.level`          | `INFO`, `DEBUG`, …                               |
-| `STARPLOT_DATA_PATH`   | data directory           | where starplot reads/writes catalogs (`data/`)   |
-| `MPLBACKEND`           | matplotlib backend       | must be `Agg` (headless); set by Docker/systemd  |
-
-Copy `.env.example` to `.env` for local overrides.
+| Variable                | Overrides            | Notes                                            |
+|--------------------------|-----------------------|--------------------------------------------------|
+| `MQTT_BROKER`           | `mqtt.broker`         | broker host                                      |
+| `MQTT_PORT`             | `mqtt.port`           | broker port                                      |
+| `STARMAP_RESOLUTION`    | `render.resolution`   | output width in px                               |
+| `STARMAP_QUEUE_MAX_SIZE`| `queue.max_size`      | max requests waiting in line (0 = unbounded)     |
+| `STARMAP_OUTPUT_MODE`   | `output.mode`         | `file` (default) or `base64`                     |
+| `LOG_LEVEL`             | `logging.level`       | `INFO`, `DEBUG`, …                               |
+| `STARPLOT_DATA_PATH`    | data directory        | where starplot reads/writes catalogs (`data/`)   |
+| `MPLBACKEND`            | matplotlib backend    | must be `Agg` (headless); set by Docker/systemd  |
 
 ---
 
@@ -230,73 +355,6 @@ starplot will also download any missing files automatically on the first render,
 
 ---
 
-## Running
-
-### Option A — Docker (local development / testing on macOS)
-
-Docker is for local testing only. It brings up a throwaway Mosquitto broker plus the service, so
-you can exercise the full request/response flow.
-
-```bash
-docker compose up --build
-```
-
-This starts:
-- `starmap_mosquitto` — an MQTT broker on `localhost:1883`;
-- `starmap_service` — the renderer, connected to that broker.
-
-`config/config.yaml` and `data/` are mounted as volumes (so you can edit config and keep catalogs
-without rebuilding the image).
-
-Test it end-to-end from another terminal (requires `mosquitto-clients`):
-
-```bash
-# Watch results and status
-mosquitto_sub -h localhost -t 'starmap/result' -t 'starmap/status' -v
-
-# Send a render request
-mosquitto_pub -h localhost -t starmap/command \
-  -m '{"request_id":"1","lat":55.75,"lon":37.62,"map_type":"full"}'
-```
-
-> On an Intel Mac the Linux container needs the `linux_amd64` DuckDB extension; starplot downloads
-> it into the mounted `data/` on first use. On Apple Silicon the bundled `linux_arm64` build is used.
-
-### Option B — Raspberry Pi (production, no Docker)
-
-Deployment on the Pi does **not** use Docker. The service runs under systemd.
-
-```bash
-git clone https://github.com/miksrv/starmap-service.git
-cd starmap-service
-bash scripts/install.sh
-```
-
-`install.sh` will:
-
-1. create a virtual environment in `venv/`;
-2. install dependencies from `requirements.txt`;
-3. download starplot catalogs into `data/` if they are missing;
-4. create the output directory;
-5. install the systemd unit (`/etc/systemd/system/starmap.service`) with the current user and
-   project path filled in;
-6. enable and start the service.
-
-Then manage it with:
-
-```bash
-bash scripts/start.sh      # start + enable autostart on boot
-bash scripts/stop.sh       # stop + disable autostart
-bash scripts/restart.sh    # restart (e.g. after a code update)
-
-journalctl -u starmap.service -f   # follow logs
-```
-
-The systemd unit sets `Restart=always` and `MPLBACKEND=Agg`, so the service comes back after a
-crash or reboot — and the MQTT status correctly reflects whether it is alive.
-
----
-
 ## Operational notes
 
 - **One render at a time, with a queue.** matplotlib is not thread-safe and the Pi cannot handle
@@ -310,12 +368,63 @@ crash or reboot — and the MQTT status correctly reflects whether it is alive.
 
 ---
 
-## Requirements
+## Troubleshooting
 
-- Python 3.10–3.13
-- An MQTT broker (Mosquitto) reachable by both the bot and the service
-- See `requirements.txt` (starplot, matplotlib, numpy, astropy, pytz, paho-mqtt, PyYAML,
-  python-dotenv)
+**Bot never gets a reply / times out waiting**
+- Confirm the service is actually running and connected: `mosquitto_sub -t starmap/status -v`
+  should show a retained `{"status": "online"}`.
+- Check `journalctl -u starmap.service -f` (Pi) or `docker compose logs -f starmap` for errors.
+- The bot's wait budget is ~90–120 s; a large `render.resolution` on the Pi can blow through that —
+  lower it (`STARMAP_RESOLUTION`) and re-test.
+
+**`error: "queue full, try again later"`**
+- More requests are arriving than the single render worker can drain. Raise `queue.max_size`
+  (`STARMAP_QUEUE_MAX_SIZE`) if bursts are expected and normal, or investigate why renders are
+  slower than expected (resolution, catalog size, Pi load).
+
+**Bot can't find the rendered image (`file` mode)**
+- The bot reads `image_path` directly from disk, so it must run on the **same host** as this
+  service (or share the output directory over a mounted/synced filesystem) and must be configured
+  to only trust paths under that directory.
+- Check `output.dir` / `OUTPUT_DIR` and that the process has write permission to it.
+
+**`optic` requests always fail with "requires target.ra and target.dec"**
+- Object-name lookup (`target.object`, e.g. `M31`) is not implemented yet — the request must
+  supply explicit `target.ra` / `target.dec` in degrees. See `ROADMAP.md`.
+
+**`Target is below horizon` / `Field of View too big` for `optic`**
+- These are expected validation errors from starplot, not bugs: the target isn't visible at the
+  given time/place, or the optic's field of view exceeds the 20° `OpticPlot` limit — pick a
+  narrower optic or a different target/time.
+
+**starplot / DuckDB extension errors on first run**
+- Run `bash scripts/fetch-data.sh` to fetch catalogs and the matching DuckDB spatial extension
+  explicitly, instead of relying on the automatic on-demand download.
+- Make sure the architecture matches: the repo ships the `linux_arm64` build for the Pi; on
+  another architecture (e.g. Intel Mac via Docker) starplot downloads the matching one into the
+  mounted `data/` on first use.
+
+**Renders are too slow on the Pi**
+- Lower `render.resolution`, and consider a lower `render.star_magnitude_limit` (fewer stars to
+  plot). Profile the first render (cold catalogs) separately from a repeat render.
+
+---
+
+## Development & Testing
+
+- Run the test suite with `pytest tests/ -v` (see `tests/` — config, request parsing/validation,
+  errors, renderer, storage, service).
+- Dev-only dependencies (pytest, black, isort, pylint, coverage) are in `requirements-dev.txt`.
+- CI (`.github/workflows/check.yml`) runs, in order: `black --check --line-length 120 .`,
+  `isort --check-only --profile black --line-length 120 .`, `pylint` (excluding `tests/`,
+  `fail-under 7.0`), then `pytest tests/ -v`.
+- A separate SonarCloud quality gate (`.github/workflows/sonarcloud.yml`) runs on push/PR to
+  `main`; project settings are in `sonar-project.properties`.
+- Formatting and lint settings live in `pyproject.toml` — match the 120-character line length and
+  run black/isort before committing.
+- `scripts/send_request.py` is a small MQTT test client: it publishes a request, waits for the
+  matching `starmap/result`, and saves the chart (or reports the file path in `file` mode) — handy
+  for manual end-to-end checks without a running bot.
 
 ---
 
@@ -326,3 +435,9 @@ crash or reboot — and the MQTT status correctly reflects whether it is alive.
 - MQTT contract with the bot: [`API.md`](API.md)
 - Design notes and remaining work: `ROADMAP.md`
 - Architecture/concept reference: `CLAUDE.md`
+
+---
+
+## License
+
+[MIT License](LICENSE)
