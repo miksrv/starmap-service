@@ -3,6 +3,8 @@
 A long-running Python service that generates **star charts** (maps of the night sky) on demand
 and serves them to a Telegram bot over **MQTT**.
 
+![Starmap Service](docs/cover.jpg)
+
 It is built to run on Linux — primarily a **Raspberry Pi** — as a standalone, always-on process.
 Heavy astronomical catalogs are loaded once at startup and kept in memory; each incoming request
 is rendered into a PNG and sent back to the bot.
