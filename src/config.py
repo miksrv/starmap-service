@@ -71,7 +71,7 @@ QUEUE_MAX_SIZE = int(os.getenv("STARMAP_QUEUE_MAX_SIZE", _queue_cfg.get("max_siz
 # --- Output delivery ---
 # "base64": embed the PNG in the MQTT reply. "file": write to OUTPUT_DIR and
 # return its path (lighter on the broker when bot and service share one host).
-OUTPUT_MODE = os.getenv("STARMAP_OUTPUT_MODE", _output_cfg.get("mode", "base64"))
+OUTPUT_MODE = os.getenv("STARMAP_OUTPUT_MODE", _output_cfg.get("mode", "file"))
 _output_dir = Path(_output_cfg.get("dir", "output"))
 OUTPUT_DIR = _output_dir if _output_dir.is_absolute() else BASE_DIR / _output_dir
 

@@ -97,10 +97,15 @@ def parse_command(data: dict) -> RenderRequest:
     if not isinstance(target, dict):
         raise ValidationError("'target' must be an object with 'object' or 'ra'/'dec'")
     if map_type in _TARGET_REQUIRED:
-        has_object = bool(target.get("object"))
         has_coords = target.get("ra") is not None and target.get("dec") is not None
-        if not (has_object or has_coords):
-            raise ValidationError(f"map_type '{map_type}' requires a target ('object' name or 'ra'+'dec')")
+        # Object-name lookup (e.g. "M31") is not implemented yet (see ROADMAP.md),
+        # so reject it here rather than accepting the request and failing later
+        # in the renderer after the bot has already been told "queued".
+        if not has_coords:
+            raise ValidationError(
+                f"map_type '{map_type}' requires target.ra and target.dec (degrees); "
+                "object-name lookup is not supported yet"
+            )
 
     # Optic block — required for optic.
     optic = data.get("optic") or {}

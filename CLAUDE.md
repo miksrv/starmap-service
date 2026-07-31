@@ -50,10 +50,11 @@ scripts/                 # install.sh, start.sh, stop.sh, restart.sh
 
 ### Current state
 
-The MQTT service architecture is in place. `render` currently implements `full` (the original
-all-sky RA/DEC chart, now parameterized by `config.RESOLUTION`); `horizon` and `zenith` return a
-"not implemented yet" error and are the next ROADMAP item (§3 — observer-bound charts). The old
-one-shot `map_big.png` script behavior now lives inside `Renderer._render_full`.
+The MQTT service architecture is in place, and all five chart types (`full`, `galactic`, `zenith`,
+`horizon`, `optic`) are implemented — see [Chart types](#chart-types-map_type--all-implemented)
+below. The old one-shot `map_big.png` script behavior now lives inside `Renderer._render_full`.
+Remaining work — object-name lookup for `optic` targets, Russian label localization — is tracked
+in `ROADMAP.md`.
 
 Deployment target is the Raspberry Pi **without Docker** (Docker/`docker-compose.yml` exist only
 for local development). On the Pi the service runs under **systemd** with `Restart=always` and
