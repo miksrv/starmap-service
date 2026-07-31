@@ -13,6 +13,7 @@ Rendering is powered by [**starplot**](https://github.com/steveberardi/starplot)
 
 [![Checks](https://github.com/miksrv/starmap-service/actions/workflows/check.yml/badge.svg)](https://github.com/miksrv/starmap-service/actions/workflows/check.yml)
 [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=miksrv_starmap-service&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=miksrv_starmap-service)
+[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=miksrv_starmap-service&metric=coverage)](https://sonarcloud.io/summary/new_code?id=miksrv_starmap-service)
 
 ---
 
