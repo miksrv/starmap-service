@@ -40,12 +40,15 @@ src/
   renderer.py            # Renderer.render(RenderRequest) -> PNG bytes; style built once, reused
   storage.py             # file-mode output: <request_id>.png + retention pruning
   service.py             # MQTT loop: command → validate → enqueue → (worker) render → result; status (online/offline) + LWT
+tests/                   # pytest suite covering config/request/errors/renderer/storage/service
 config/
   config.yaml            # runtime parameters (resolution, style, output mode…); mounted separately in Docker
   mosquitto.conf         # throwaway broker config for local testing
 data/                    # starplot catalogs (parquet + de421.bsp + duckdb-extensions); data_path target
 systemd/starmap.service  # unit template (__USER__ / __WORKDIR__ filled in by install.sh)
-scripts/                 # install.sh, start.sh, stop.sh, restart.sh
+scripts/                 # install.sh, start.sh, stop.sh, restart.sh, fetch-data.sh, send_request.py
+Dockerfile               # local-dev image (not used on the Pi)
+docker-compose.yml       # local-dev stack: throwaway mosquitto broker + the service
 ```
 
 ### Current state
@@ -53,8 +56,8 @@ scripts/                 # install.sh, start.sh, stop.sh, restart.sh
 The MQTT service architecture is in place, and all five chart types (`full`, `galactic`, `zenith`,
 `horizon`, `optic`) are implemented — see [Chart types](#chart-types-map_type--all-implemented)
 below. The old one-shot `map_big.png` script behavior now lives inside `Renderer._render_full`.
-Remaining work — object-name lookup for `optic` targets, Russian label localization — is tracked
-in `ROADMAP.md`.
+Config, the queue/worker, LWT/status, retention pruning, and a `tests/` suite are all in place too.
+See [Running](#running) below for what's actually still open.
 
 Deployment target is the Raspberry Pi **without Docker** (Docker/`docker-compose.yml` exist only
 for local development). On the Pi the service runs under **systemd** with `Restart=always` and
@@ -100,7 +103,8 @@ Each maps to a starplot plot class in `Renderer` (starplot 0.20.x):
 
 - `full` — `MapPlot` (Miller, all-sky RA/DEC). `_render_full`.
 - `galactic` — `GalaxyPlot` (Mollweide, galactic coords; no observer). `_render_galactic`.
-- `zenith` — `ZenithPlot(observer=...)` + `.horizon()` + `.info()`. `_render_zenith`.
+- `zenith` — `ZenithPlot(observer=...)` + `.horizon()`. `_render_zenith`. (`.info()` is deliberately
+  **not** called — it's broken in starplot 0.20.4, references a missing `self.dt`.)
 - `horizon` — `HorizonPlot(altitude, azimuth, observer=...)`; `options.direction` picks the azimuth. `_render_horizon`.
 - `optic` — `OpticPlot(ra, dec, optic, observer=...)`. `_render_optic` + `_build_optic`/`_target_radec`.
 
@@ -178,7 +182,12 @@ lifetime of the service.
   and starts the systemd unit). Manage with `scripts/{start,stop,restart}.sh`; logs via
   `journalctl -u starmap.service -f`.
 - **Configuration:** edit `config/config.yaml` (e.g. `render.resolution`); environment variables
-  override it (`MQTT_BROKER`, `STARMAP_RESOLUTION`, `STARMAP_OUTPUT_MODE`, `LOG_LEVEL`). In Docker
-  the config file is mounted separately so it can be changed without rebuilding.
+  override it (`MQTT_BROKER`, `MQTT_PORT`, `STARMAP_RESOLUTION`, `STARMAP_QUEUE_MAX_SIZE`,
+  `STARMAP_OUTPUT_MODE`, `STARPLOT_DATA_PATH`, `LOG_LEVEL`; full list with descriptions in
+  `README.md`). In Docker the config file is mounted separately so it can be changed without
+  rebuilding.
 
-See `ROADMAP.md` for the remaining work (observer-bound `horizon`/`zenith` charts, tests, etc.).
+`ROADMAP.md` is the original pre-implementation plan; most of its checklist is now done even where
+the checkboxes weren't updated (config, the MQTT service, deployment, tests, docs), so treat unchecked
+items there as needing re-verification rather than as an accurate to-do list. The concrete work still
+open is: object-name lookup for `optic` targets, and Russian label localization.

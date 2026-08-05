@@ -3,7 +3,8 @@
 The heavy catalogs are loaded lazily by starplot's DuckDB backend; the default
 style is built once here and reused. matplotlib is not thread-safe and the
 Raspberry Pi cannot afford parallel renders, so callers MUST serialize calls to
-:meth:`Renderer.render` (the MQTT service holds a lock for this).
+:meth:`Renderer.render` (the MQTT service does this via a single worker thread
+draining a queue, see `src/service.py`).
 
 Implemented map types: `full`, `galactic`, `zenith`, `horizon`, `optic`.
 """
