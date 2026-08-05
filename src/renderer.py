@@ -299,6 +299,10 @@ class Renderer:
             where=[_.magnitude < config.STAR_MAGNITUDE_LIMIT],
             where_labels=[_.magnitude < 2.1],
         )
+        self._plot_dsos(p)
+        p.planets()
+        p.moon(true_size=True, show_phase=True)
+        p.sun()
         p.milky_way()
         lines_before = len(p.ax.lines)
         p.gridlines()
