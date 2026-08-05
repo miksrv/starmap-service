@@ -51,6 +51,27 @@ _FULL_REFERENCE_RESOLUTION = 6000
 # `.xy`/transform — see Renderer._recenter_horizon_labels.
 _HORIZON_LABEL_TARGET = ((0.5, 0.954), (0.046, 0.5), (0.5, 0.046), (0.954, 0.5))  # N, E, S, W
 
+# The "white horizontal line" is gridlines()'s divider_line — a Line2D at
+# y=-0.04*scale (self.ax.plot(...), added to p.ax.lines by gridlines(),
+# *before* horizon() ever runs). HorizonPlot.horizon() separately draws a
+# ground-bar Polygon at the same [-0.04*scale, -0.11*scale] range and places
+# its azimuth/cardinal labels at patch_y + 0.027 — that "+0.027" is a FIXED
+# offset, not scaled, while the bar (and divider_line) shrink with `scale`.
+# At our project's resolution (scale well under 1), both collapse close
+# enough to the axis to overlap gridlines()'s tick-number labels (also at a
+# fixed points-based offset), and the unscaled "+0.027" then lands the
+# cardinal labels back inside/above the bar instead of below it.
+#
+# Shift the divider_line and the ground bar down by the same fixed
+# axes-fraction amount (independent of `scale`, since the thing they're
+# clearing is also fixed), and re-anchor the cardinal labels below the
+# shifted bar; font size is cut separately in _render_horizon. Those labels
+# use `xytext`+`textcoords="offset points"`, so — unlike the zenith N/E/S/W
+# labels — the render position is (re)computed from `.xy` at draw time;
+# `.xyann` is just an unresolved (0, 0) placeholder beforehand.
+_HORIZON_BAR_SHIFT = 0.02
+_HORIZON_LABEL_Y = -0.085
+
 # Compass direction -> azimuth (degrees). Used to center a horizon panorama.
 _DIRECTION_AZIMUTH = {
     "N": 0,
@@ -240,6 +261,23 @@ class Renderer:
         for text, target in zip(new_labels, _HORIZON_LABEL_TARGET):
             text.xyann = target
 
+    @staticmethod
+    def _lower_horizon_bar(p, lines_before: int, patches_before: int, labels_before: int) -> None:
+        """Shift the divider_line (from gridlines()) and the ground bar
+        (from horizon()) further below the axis, and move the azimuth/
+        cardinal labels below the (now-shifted) bar; see _HORIZON_BAR_SHIFT
+        above for why this is needed."""
+        for line in p.ax.lines[lines_before:]:
+            ydata = line.get_ydata()
+            line.set_ydata([y - _HORIZON_BAR_SHIFT for y in ydata])
+        for patch in p.ax.patches[patches_before:]:
+            xy = patch.get_xy()
+            xy[:, 1] -= _HORIZON_BAR_SHIFT
+            patch.set_xy(xy)
+        for text in p.ax.texts[labels_before:]:
+            x, _old_y = text.xy
+            text.xy = (x, _HORIZON_LABEL_Y)
+
     def _render_horizon(self, request: RenderRequest) -> bytes:
         """Panorama of the sky above the horizon, centered on a compass direction."""
         direction = str(request.options.get("direction", "S")).upper()
@@ -262,8 +300,14 @@ class Renderer:
             where_labels=[_.magnitude < 2.1],
         )
         p.milky_way()
+        lines_before = len(p.ax.lines)
         p.gridlines()
-        p.horizon()  # ground rectangle + azimuth/cardinal labels
+        patches_before = len(p.ax.patches)
+        labels_before = len(p.ax.texts)
+        with p.style.horizon as h:
+            h.label.font_size *= 0.6
+            p.horizon()  # ground rectangle + azimuth/cardinal labels
+        self._lower_horizon_bar(p, lines_before, patches_before, labels_before)
         return self._export(p)
 
     def _render_galactic(self, request: RenderRequest) -> bytes:
