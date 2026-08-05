@@ -40,6 +40,17 @@ logger = logging.getLogger(__name__)
 # to it so the map looks the same at any resolution, just lighter.
 _FULL_REFERENCE_RESOLUTION = 6000
 
+# ZenithPlot.horizon() anchors its N/E/S/W labels at hardcoded axes-fraction
+# coordinates (see starplot's plots/zenith.py `label_ax_coords`) that are NOT
+# equidistant from the plot center: N sits at radius 0.450, W at 0.454, and
+# E/S at 0.455 — so N reads as hugging the inner (star-field) edge while
+# E/S/W sit right at or past the horizon ring itself. Re-anchor all four to
+# the same radius (0.454, the horizon ring's own radius) instead of nudging
+# them by a relative offset, so they're visually consistent. Order matches
+# the N/E/S/W order `horizon()` annotates in. Must mutate `.xyann`, not
+# `.xy`/transform — see Renderer._recenter_horizon_labels.
+_HORIZON_LABEL_TARGET = ((0.5, 0.954), (0.046, 0.5), (0.5, 0.046), (0.954, 0.5))  # N, E, S, W
+
 # Compass direction -> azimuth (degrees). Used to center a horizon panorama.
 _DIRECTION_AZIMUTH = {
     "N": 0,
@@ -212,10 +223,22 @@ class Renderer:
         self._plot_dsos(p)
         p.constellation_labels()
         p.milky_way()
+        labels_before = len(p.ax.texts)
         p.horizon()  # great circle + N/E/S/W cardinal labels
+        self._recenter_horizon_labels(p, labels_before)
         # NOTE: p.info() is broken in starplot 0.20.4 (references a missing
         # `self.dt`), so we don't call it.
         return self._export(p)
+
+    @staticmethod
+    def _recenter_horizon_labels(p, labels_before: int) -> None:
+        """Re-anchor the N/E/S/W labels p.horizon() just added; see
+        _HORIZON_LABEL_TARGET above for why this is needed. Annotations
+        render from `.xyann`, not `.xy` — mutating `.xy` or the artist's
+        transform has no effect on the drawn position."""
+        new_labels = p.ax.texts[labels_before:]
+        for text, target in zip(new_labels, _HORIZON_LABEL_TARGET):
+            text.xyann = target
 
     def _render_horizon(self, request: RenderRequest) -> bytes:
         """Panorama of the sky above the horizon, centered on a compass direction."""
