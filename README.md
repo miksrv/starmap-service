@@ -141,23 +141,30 @@ All five chart types are implemented.
 Notes:
 - `horizon` accepts `options.direction` (one of `N, NE, E, SE, S, SW, W, NW`; default `S`) to
   choose which 180°-wide swath of the horizon to show.
-- `optic` currently requires explicit `target.ra` / `target.dec` (degrees) — a request with only
-  `target.object` (e.g. `M31`) is rejected at validation time, since resolving an object name to
-  coordinates is not implemented yet (tracked in `ROADMAP.md`). If the target is below the horizon
-  at the given time/place, or the field of view is too wide (> 20°), the service replies with an
-  `error`.
+- `optic` accepts either explicit `target.ra` / `target.dec` (degrees) or `target.object` — an
+  object name (catalog number, Sun/Moon/planet, star, or DSO common name) resolved server-side. If
+  the target is below the horizon at the given time/place, or the field of view is too wide (> 20°),
+  the service replies with an `error`.
+
+See [`API.md`](API.md#chart-types-map_type) for the full field tables, the optic definitions, the
+object-name resolution order, and the error catalog.
 
 ---
 
 ## Example charts
 
-| `full` | `galactic` |
-|:---:|:---:|
-| [![full](docs/full.png)](docs/full.png) | [![galactic](docs/galactic.png)](docs/galactic.png) |
+|                    `full`                    |
+|:---------------------------------------:|
+| [![full](docs/full.png)](docs/full.png) |
 
-| `zenith` | `horizon` |
+| `horizon` | `galactic` |
 |:---:|:---:|
-| [![zenith](docs/zenith.png)](docs/zenith.png) | [![horizon](docs/horizon.png)](docs/horizon.png) |
+| [![horizon](docs/horizon.png)](docs/horizon.png) | [![galactic](docs/galactic.png)](docs/galactic.png) |
+
+| `zenith` |  `optic` (M51 through a 200/1200 reflector) |
+|:---:|:---:|
+| [![zenith](docs/zenith.png)](docs/zenith.png) | [![optic](docs/optic.jpg)](docs/optic.jpg) |
+
 
 ---
 
@@ -451,6 +458,7 @@ starplot will also download any missing files automatically on the first render,
 - MQTT contract with the bot: [`API.md`](API.md)
 - Design notes and remaining work: `ROADMAP.md`
 - Architecture/concept reference: `CLAUDE.md`
+- Version history: [`CHANGELOG.md`](CHANGELOG.md)
 
 ---
 

@@ -5,6 +5,9 @@ construction, target resolution, resolution parsing, the direction table and
 map-type dispatch.
 """
 
+from types import SimpleNamespace
+from unittest import mock
+
 import pytest
 
 from src import renderer as rmod
@@ -96,26 +99,94 @@ def test_build_optic_non_numeric_field():
 # _target_radec
 # ---------------------------------------------------------------------------
 def test_target_radec_from_coords():
-    ra, dec = Renderer._target_radec(_req(target={"ra": 10.5, "dec": 41.2}))
+    ra, dec = Renderer()._target_radec(_req(target={"ra": 10.5, "dec": 41.2}))
     assert ra == pytest.approx(10.5)
     assert dec == pytest.approx(41.2)
 
 
 def test_target_radec_non_numeric():
     with pytest.raises(ValidationError) as exc:
-        Renderer._target_radec(_req(target={"ra": "x", "dec": "y"}))
+        Renderer()._target_radec(_req(target={"ra": "x", "dec": "y"}))
     assert "must be numbers" in str(exc.value)
-
-
-def test_target_radec_object_name_not_supported():
-    with pytest.raises(ValidationError) as exc:
-        Renderer._target_radec(_req(target={"object": "M31"}))
-    assert "object-name lookup is not supported" in str(exc.value)
 
 
 def test_target_radec_empty():
     with pytest.raises(ValidationError):
-        Renderer._target_radec(_req(target={}))
+        Renderer()._target_radec(_req(target={}))
+
+
+# ---------------------------------------------------------------------------
+# _resolve_object_name — catalog-number parsing (M31 / "M 31" / "M_31" / ngc-224 / IC1396).
+# DSO.get/.find, Star.find, Planet.get are mocked so these are deterministic
+# regardless of whether the real starplot (with real catalogs, e.g. in CI) or
+# the tests/conftest.py stub is active — we're testing the normalization and
+# dispatch logic here, not real catalog data.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("spelling", ["M31", "M 31", "M_31", "m-31"])
+def test_resolve_object_name_messier_spellings(spelling):
+    fake_dso = SimpleNamespace(ra=10.68, dec=41.27)
+    with mock.patch.object(rmod.DSO, "get", return_value=fake_dso) as mock_get:
+        ra, dec = Renderer._resolve_object_name(spelling, observer=None)
+    mock_get.assert_called_once_with(m="31")
+    assert ra == pytest.approx(10.68)
+    assert dec == pytest.approx(41.27)
+
+
+@pytest.mark.parametrize(
+    "spelling,field,number",
+    [
+        ("NGC224", "ngc", "224"),
+        ("ngc 224", "ngc", "224"),
+        ("IC1396", "ic", "1396"),
+        ("ic_1396", "ic", "1396"),
+    ],
+)
+def test_resolve_object_name_ngc_ic_spellings(spelling, field, number):
+    fake_dso = SimpleNamespace(ra=1.0, dec=2.0)
+    with mock.patch.object(rmod.DSO, "get", return_value=fake_dso) as mock_get:
+        ra, dec = Renderer._resolve_object_name(spelling, observer=None)
+    mock_get.assert_called_once_with(**{field: number})
+    assert (ra, dec) == pytest.approx((1.0, 2.0))
+
+
+def test_resolve_object_name_catalog_number_not_found():
+    with mock.patch.object(rmod.DSO, "get", return_value=None):
+        with pytest.raises(ValidationError) as exc:
+            Renderer._resolve_object_name("M999999", observer=None)
+    assert "not found" in str(exc.value)
+    assert "M999999" in str(exc.value)
+
+
+def test_resolve_object_name_empty_rejected():
+    with pytest.raises(ValidationError) as exc:
+        Renderer._resolve_object_name("   ", observer=None)
+    assert "must not be empty" in str(exc.value)
+
+
+def test_resolve_object_name_common_name_lookup():
+    # Not a catalog number, not "sun"/"moon" — falls through past Planet/Star
+    # (both miss) to the DSO common-name search.
+    fake_dso = SimpleNamespace(ra=10.68, dec=41.27)
+    with (
+        mock.patch.object(rmod.DSO, "get", return_value=None),
+        mock.patch.object(rmod.Planet, "get", return_value=None),
+        mock.patch.object(rmod.Star, "find", return_value=[]),
+        mock.patch.object(rmod.DSO, "find", return_value=[fake_dso]),
+    ):
+        ra, dec = Renderer._resolve_object_name("Andromeda Galaxy", observer=None)
+    assert (ra, dec) == pytest.approx((10.68, 41.27))
+
+
+def test_resolve_object_name_nothing_matches():
+    with (
+        mock.patch.object(rmod.DSO, "get", return_value=None),
+        mock.patch.object(rmod.Planet, "get", return_value=None),
+        mock.patch.object(rmod.Star, "find", return_value=[]),
+        mock.patch.object(rmod.DSO, "find", return_value=[]),
+    ):
+        with pytest.raises(ValidationError) as exc:
+            Renderer._resolve_object_name("Nonexistent Thing", observer=None)
+    assert "not found" in str(exc.value)
 
 
 # ---------------------------------------------------------------------------

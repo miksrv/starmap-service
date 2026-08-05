@@ -3,26 +3,33 @@
 The heavy catalogs are loaded lazily by starplot's DuckDB backend; the default
 style is built once here and reused. matplotlib is not thread-safe and the
 Raspberry Pi cannot afford parallel renders, so callers MUST serialize calls to
-:meth:`Renderer.render` (the MQTT service holds a lock for this).
+:meth:`Renderer.render` (the MQTT service does this via a single worker thread
+draining a queue, see `src/service.py`).
 
 Implemented map types: `full`, `galactic`, `zenith`, `horizon`, `optic`.
 """
 
 import logging
+import re
 from io import BytesIO
 
 from starplot import (
+    DSO,
     Binoculars,
     Camera,
     GalaxyPlot,
     HorizonPlot,
     MapPlot,
     Miller,
+    Moon,
     Observer,
     OpticPlot,
+    Planet,
     Reflector,
     Refractor,
     Scope,
+    Star,
+    Sun,
     ZenithPlot,
     _,
     settings,
@@ -38,6 +45,38 @@ logger = logging.getLogger(__name__)
 # The full-sky style was tuned at this resolution (scale 0.8); we scale relative
 # to it so the map looks the same at any resolution, just lighter.
 _FULL_REFERENCE_RESOLUTION = 6000
+
+# ZenithPlot.horizon() anchors its N/E/S/W labels at hardcoded axes-fraction
+# coordinates (see starplot's plots/zenith.py `label_ax_coords`) that are NOT
+# equidistant from the plot center: N sits at radius 0.450, W at 0.454, and
+# E/S at 0.455 — so N reads as hugging the inner (star-field) edge while
+# E/S/W sit right at or past the horizon ring itself. Re-anchor all four to
+# the same radius (0.454, the horizon ring's own radius) instead of nudging
+# them by a relative offset, so they're visually consistent. Order matches
+# the N/E/S/W order `horizon()` annotates in. Must mutate `.xyann`, not
+# `.xy`/transform — see Renderer._recenter_horizon_labels.
+_HORIZON_LABEL_TARGET = ((0.5, 0.954), (0.046, 0.5), (0.5, 0.046), (0.954, 0.5))  # N, E, S, W
+
+# The "white horizontal line" is gridlines()'s divider_line — a Line2D at
+# y=-0.04*scale (self.ax.plot(...), added to p.ax.lines by gridlines(),
+# *before* horizon() ever runs). HorizonPlot.horizon() separately draws a
+# ground-bar Polygon at the same [-0.04*scale, -0.11*scale] range and places
+# its azimuth/cardinal labels at patch_y + 0.027 — that "+0.027" is a FIXED
+# offset, not scaled, while the bar (and divider_line) shrink with `scale`.
+# At our project's resolution (scale well under 1), both collapse close
+# enough to the axis to overlap gridlines()'s tick-number labels (also at a
+# fixed points-based offset), and the unscaled "+0.027" then lands the
+# cardinal labels back inside/above the bar instead of below it.
+#
+# Shift the divider_line and the ground bar down by the same fixed
+# axes-fraction amount (independent of `scale`, since the thing they're
+# clearing is also fixed), and re-anchor the cardinal labels below the
+# shifted bar; font size is cut separately in _render_horizon. Those labels
+# use `xytext`+`textcoords="offset points"`, so — unlike the zenith N/E/S/W
+# labels — the render position is (re)computed from `.xy` at draw time;
+# `.xyann` is just an unresolved (0, 0) placeholder beforehand.
+_HORIZON_BAR_SHIFT = 0.02
+_HORIZON_LABEL_Y = -0.085
 
 # Compass direction -> azimuth (degrees). Used to center a horizon panorama.
 _DIRECTION_AZIMUTH = {
@@ -122,10 +161,33 @@ class Renderer:
             return config.RESOLUTION
 
     @staticmethod
+    def _scale_for(resolution: int) -> float:
+        # All marker/font sizing (the manual font_size overrides in _plot_dsos,
+        # constellation_labels, etc.) was tuned for a 6000px map at scale 0.8.
+        # Passing this explicit scale (instead of starplot's own autoscale,
+        # which divides by its unrelated DEFAULT_RESOLUTION=4096) keeps every
+        # map_type visually consistent with `full` at any configured resolution.
+        return 0.8 * resolution / _FULL_REFERENCE_RESOLUTION
+
+    @staticmethod
     def _observer(request: RenderRequest) -> Observer:
         # request.dt is always timezone-aware (parse_command guarantees it),
         # which is what starplot's Observer requires.
         return Observer(dt=request.dt, lat=request.lat, lon=request.lon)
+
+    @staticmethod
+    def _solar_system_observer(request: RenderRequest) -> Observer:
+        # full/galactic don't require observer coordinates (they're whole-sky,
+        # location-independent charts), so request.lat/lon may be None. But
+        # planets()/moon()/sun() need *some* Observer to compute apparent
+        # positions, and its default (Observer(), no args) uses the *current*
+        # real-world time — not request.dt — which would silently render
+        # today's actual planet/Moon positions on a chart for a different
+        # requested date. Build one explicitly, defaulting to lat/lon 0 (same
+        # as starplot's own Observer() default) so dt is always correct.
+        lat = request.lat if request.lat is not None else 0.0
+        lon = request.lon if request.lon is not None else 0.0
+        return Observer(dt=request.dt, lat=lat, lon=lon)
 
     @staticmethod
     def _export(plot) -> bytes:
@@ -162,19 +224,16 @@ class Renderer:
     def _render_full(self, request: RenderRequest) -> bytes:
         """All-sky RA/DEC map (the original main.py behavior, parameterized)."""
         resolution = self._resolution_for(request)
-        # The full-sky style (fonts, markers, the font_size overrides below) was
-        # tuned for a 6000px map at scale 0.8. Keep that ratio at any resolution
-        # so labels/objects don't look oversized on smaller renders.
-        scale = 0.8 * resolution / _FULL_REFERENCE_RESOLUTION
         p = MapPlot(
             projection=Miller(),
             ra_min=0,
             ra_max=360,
             dec_min=-80,
             dec_max=80,
+            observer=self._solar_system_observer(request),
             style=self._style_for(request),
             resolution=resolution,
-            scale=scale,
+            scale=self._scale_for(resolution),
         )
         p.gridlines()
         p.constellations()
@@ -183,6 +242,11 @@ class Renderer:
             where_labels=[_.magnitude < 2.1],
         )
         self._plot_dsos(p)
+        p.planets()
+        p.moon()  # marker icon, not true size: at whole-sky scale a true-size
+        # ~0.5° Moon is a near-invisible dot; horizon/optic keep true_size=True
+        # since their tighter FOV makes it actually visible.
+        p.sun()
         p.constellation_labels(style__font_size=28)
         p.milky_way()
         p.ecliptic()
@@ -191,11 +255,12 @@ class Renderer:
 
     def _render_zenith(self, request: RenderRequest) -> bytes:
         """Dome of sky overhead at the observer's time and place."""
+        resolution = self._resolution_for(request)
         p = ZenithPlot(
             observer=self._observer(request),
             style=self._style_for(request),
-            resolution=self._resolution_for(request),
-            autoscale=True,
+            resolution=resolution,
+            scale=self._scale_for(resolution),
         )
         p.constellations()
         p.stars(
@@ -203,12 +268,44 @@ class Renderer:
             where_labels=[_.magnitude < 2.1],
         )
         self._plot_dsos(p)
+        p.planets()
+        p.moon()  # marker icon; see _render_full for why not true_size
+        p.sun()
         p.constellation_labels()
         p.milky_way()
+        labels_before = len(p.ax.texts)
         p.horizon()  # great circle + N/E/S/W cardinal labels
+        self._recenter_horizon_labels(p, labels_before)
         # NOTE: p.info() is broken in starplot 0.20.4 (references a missing
         # `self.dt`), so we don't call it.
         return self._export(p)
+
+    @staticmethod
+    def _recenter_horizon_labels(p, labels_before: int) -> None:
+        """Re-anchor the N/E/S/W labels p.horizon() just added; see
+        _HORIZON_LABEL_TARGET above for why this is needed. Annotations
+        render from `.xyann`, not `.xy` — mutating `.xy` or the artist's
+        transform has no effect on the drawn position."""
+        new_labels = p.ax.texts[labels_before:]
+        for text, target in zip(new_labels, _HORIZON_LABEL_TARGET):
+            text.xyann = target
+
+    @staticmethod
+    def _lower_horizon_bar(p, lines_before: int, patches_before: int, labels_before: int) -> None:
+        """Shift the divider_line (from gridlines()) and the ground bar
+        (from horizon()) further below the axis, and move the azimuth/
+        cardinal labels below the (now-shifted) bar; see _HORIZON_BAR_SHIFT
+        above for why this is needed."""
+        for line in p.ax.lines[lines_before:]:
+            ydata = line.get_ydata()
+            line.set_ydata([y - _HORIZON_BAR_SHIFT for y in ydata])
+        for patch in p.ax.patches[patches_before:]:
+            xy = patch.get_xy()
+            xy[:, 1] -= _HORIZON_BAR_SHIFT
+            patch.set_xy(xy)
+        for text in p.ax.texts[labels_before:]:
+            x, _old_y = text.xy
+            text.xy = (x, _HORIZON_LABEL_Y)
 
     def _render_horizon(self, request: RenderRequest) -> bytes:
         """Panorama of the sky above the horizon, centered on a compass direction."""
@@ -216,31 +313,15 @@ class Renderer:
         center = _DIRECTION_AZIMUTH.get(direction, 180)
         azimuth = (center - 90, center + 90)  # 180-deg wide swath (starplot's max)
         altitude = (0, 70)
+        resolution = self._resolution_for(request)
 
         p = HorizonPlot(
             altitude=altitude,
             azimuth=azimuth,
             observer=self._observer(request),
             style=self._style_for(request),
-            resolution=self._resolution_for(request),
-            autoscale=True,
-        )
-        p.constellations()
-        p.stars(
-            where=[_.magnitude < config.STAR_MAGNITUDE_LIMIT],
-            where_labels=[_.magnitude < 2.1],
-        )
-        p.milky_way()
-        p.gridlines()
-        p.horizon()  # ground rectangle + azimuth/cardinal labels
-        return self._export(p)
-
-    def _render_galactic(self, request: RenderRequest) -> bytes:
-        """All-sky map in galactic coordinates (Mollweide). No observer needed."""
-        p = GalaxyPlot(
-            style=self._style_for(request),
-            resolution=self._resolution_for(request),
-            autoscale=True,
+            resolution=resolution,
+            scale=self._scale_for(resolution),
         )
         p.constellations()
         p.stars(
@@ -248,6 +329,41 @@ class Renderer:
             where_labels=[_.magnitude < 2.1],
         )
         self._plot_dsos(p)
+        p.planets()
+        p.moon(true_size=True, show_phase=True)
+        p.sun()
+        p.milky_way()
+        lines_before = len(p.ax.lines)
+        p.gridlines()
+        patches_before = len(p.ax.patches)
+        labels_before = len(p.ax.texts)
+        with p.style.horizon as h:
+            h.label.font_size *= 0.6
+            p.horizon()  # ground rectangle + azimuth/cardinal labels
+        self._lower_horizon_bar(p, lines_before, patches_before, labels_before)
+        return self._export(p)
+
+    def _render_galactic(self, request: RenderRequest) -> bytes:
+        """All-sky map in galactic coordinates (Mollweide). Doesn't need an
+        observer for its projection, but planets/Moon/Sun positions still
+        depend on time (and, marginally, location) — see
+        _solar_system_observer."""
+        resolution = self._resolution_for(request)
+        p = GalaxyPlot(
+            observer=self._solar_system_observer(request),
+            style=self._style_for(request),
+            resolution=resolution,
+            scale=self._scale_for(resolution),
+        )
+        p.constellations()
+        p.stars(
+            where=[_.magnitude < config.STAR_MAGNITUDE_LIMIT],
+            where_labels=[_.magnitude < 2.1],
+        )
+        self._plot_dsos(p)
+        p.planets()
+        p.moon()  # marker icon; see _render_full for why not true_size
+        p.sun()
         p.milky_way()
         p.galactic_equator()
         p.constellation_labels()
@@ -276,21 +392,76 @@ class Renderer:
         p.open_clusters(where=[(_.magnitude < 12) | (_.magnitude.isnull())], label_fn=_dso_label)
         p.galaxies(where=[(_.magnitude < 14) | (_.magnitude.isnull())], label_fn=_dso_label)
         p.nebula(where=[(_.magnitude < 14) | (_.magnitude.isnull())], label_fn=_dso_label)
+        # NOTE: planets() with true_size=True crashes here (shapely
+        # "GEOSException: getX called on empty Point" at export time) — with
+        # 8 planets plotted regardless of in_bounds, at least one ends up far
+        # outside the optic's narrow FOV, and its true-size circle (a few
+        # arcsec across) degenerates. Moon/Sun (single objects) don't hit
+        # this, so true_size stays for them; see ROADMAP.md for the trade-off.
+        p.planets()
+        p.moon(true_size=True, show_phase=True)
+        p.sun(true_size=True)
         p.info()
         return self._export(p)
 
-    @staticmethod
-    def _target_radec(request: RenderRequest):
+    def _target_radec(self, request: RenderRequest):
         target = request.target
         if target.get("ra") is not None and target.get("dec") is not None:
             try:
                 return float(target["ra"]), float(target["dec"])
             except (TypeError, ValueError):
                 raise ValidationError("target.ra and target.dec must be numbers (degrees)")
-        # Resolving an object name (e.g. "M31") to coordinates is not wired up yet.
+        object_name = target.get("object")
+        if object_name:
+            return self._resolve_object_name(str(object_name), self._observer(request))
+        raise ValidationError("optic charts require target.ra/target.dec (degrees) or target.object (e.g. 'M31')")
+
+    # Catalog number after stripping spaces/underscores/hyphens: M31, NGC224, IC1396.
+    _CATALOG_NUMBER_RE = re.compile(r"^(M|NGC|IC)(\d[\dA-Z]*)$")
+    _CATALOG_FIELD = {"M": "m", "NGC": "ngc", "IC": "ic"}
+
+    @classmethod
+    def _resolve_object_name(cls, name: str, observer: Observer):
+        """Resolve a bot-supplied object name to RA/Dec, in whatever form a user
+        types it: catalog number ("M31", "M 31", "M_31", "ngc-224", "IC1396"),
+        Sun/Moon/planet name, star proper name (e.g. "Vega"), or DSO common
+        name (e.g. "Andromeda Galaxy"). Raises ValidationError if nothing matches."""
+        cleaned = name.strip()
+        if not cleaned:
+            raise ValidationError("target.object must not be empty")
+
+        collapsed = re.sub(r"[\s_-]", "", cleaned).upper()
+        match = cls._CATALOG_NUMBER_RE.match(collapsed)
+        if match:
+            prefix, number = match.groups()
+            dso = DSO.get(**{cls._CATALOG_FIELD[prefix]: number})
+            if dso:
+                return dso.ra, dso.dec
+            raise ValidationError(f"object '{name}' not found (no {prefix}{number} in the DSO catalog)")
+
+        lowered = cleaned.lower()
+        if lowered == "sun":
+            s = Sun.get(observer=observer)
+            return s.ra, s.dec
+        if lowered == "moon":
+            m = Moon.get(observer=observer)
+            return m.ra, m.dec
+
+        planet = Planet.get(name=cleaned, observer=observer)
+        if planet:
+            return planet.ra, planet.dec
+
+        stars = Star.find(where=[_.name.lower() == lowered])
+        if stars:
+            return stars[0].ra, stars[0].dec
+
+        dsos = DSO.find(where=[_.common_names.lower().contains(lowered)])
+        if dsos:
+            return dsos[0].ra, dsos[0].dec
+
         raise ValidationError(
-            "optic charts currently require target.ra and target.dec (degrees); "
-            "object-name lookup is not supported yet"
+            f"object '{name}' not found; try a catalog number (M31, NGC224, IC1396), "
+            "the Sun/Moon/a planet, a star name (Vega), or a common DSO name (Andromeda Galaxy)"
         )
 
     @staticmethod

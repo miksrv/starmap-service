@@ -10,6 +10,11 @@ User=__USER__
 WorkingDirectory=__WORKDIR__
 Environment=MPLBACKEND=Agg
 Environment=PYTHONPATH=__WORKDIR__
+# Safety net: install.sh pre-fetches catalogs via fetch-data.sh, but if the
+# service ever has to auto-download them itself, starplot resolves the target
+# directory from this env var at import time (falls back to the process cwd
+# otherwise) — must be set here, setting it later in Python is too late.
+Environment=STARPLOT_DATA_PATH=__WORKDIR__/data
 ExecStart=__WORKDIR__/venv/bin/python main.py
 Restart=always
 RestartSec=10
