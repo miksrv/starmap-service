@@ -414,9 +414,7 @@ class Renderer:
         object_name = target.get("object")
         if object_name:
             return self._resolve_object_name(str(object_name), self._observer(request))
-        raise ValidationError(
-            "optic charts require target.ra/target.dec (degrees) or target.object (e.g. 'M31')"
-        )
+        raise ValidationError("optic charts require target.ra/target.dec (degrees) or target.object (e.g. 'M31')")
 
     # Catalog number after stripping spaces/underscores/hyphens: M31, NGC224, IC1396.
     _CATALOG_NUMBER_RE = re.compile(r"^(M|NGC|IC)(\d[\dA-Z]*)$")

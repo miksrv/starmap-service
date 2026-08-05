@@ -458,6 +458,7 @@ starplot will also download any missing files automatically on the first render,
 - MQTT contract with the bot: [`API.md`](API.md)
 - Design notes and remaining work: `ROADMAP.md`
 - Architecture/concept reference: `CLAUDE.md`
+- Version history: [`CHANGELOG.md`](CHANGELOG.md)
 
 ---
 
