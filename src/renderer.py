@@ -170,6 +170,20 @@ class Renderer:
         return Observer(dt=request.dt, lat=request.lat, lon=request.lon)
 
     @staticmethod
+    def _solar_system_observer(request: RenderRequest) -> Observer:
+        # full/galactic don't require observer coordinates (they're whole-sky,
+        # location-independent charts), so request.lat/lon may be None. But
+        # planets()/moon()/sun() need *some* Observer to compute apparent
+        # positions, and its default (Observer(), no args) uses the *current*
+        # real-world time — not request.dt — which would silently render
+        # today's actual planet/Moon positions on a chart for a different
+        # requested date. Build one explicitly, defaulting to lat/lon 0 (same
+        # as starplot's own Observer() default) so dt is always correct.
+        lat = request.lat if request.lat is not None else 0.0
+        lon = request.lon if request.lon is not None else 0.0
+        return Observer(dt=request.dt, lat=lat, lon=lon)
+
+    @staticmethod
     def _export(plot) -> bytes:
         buf = BytesIO()
         plot.export(buf, format="png", padding=0.5)
@@ -210,6 +224,7 @@ class Renderer:
             ra_max=360,
             dec_min=-80,
             dec_max=80,
+            observer=self._solar_system_observer(request),
             style=self._style_for(request),
             resolution=resolution,
             scale=self._scale_for(resolution),
@@ -221,6 +236,11 @@ class Renderer:
             where_labels=[_.magnitude < 2.1],
         )
         self._plot_dsos(p)
+        p.planets()
+        p.moon()  # marker icon, not true size: at whole-sky scale a true-size
+        # ~0.5° Moon is a near-invisible dot; horizon/optic keep true_size=True
+        # since their tighter FOV makes it actually visible.
+        p.sun()
         p.constellation_labels(style__font_size=28)
         p.milky_way()
         p.ecliptic()
@@ -242,6 +262,9 @@ class Renderer:
             where_labels=[_.magnitude < 2.1],
         )
         self._plot_dsos(p)
+        p.planets()
+        p.moon()  # marker icon; see _render_full for why not true_size
+        p.sun()
         p.constellation_labels()
         p.milky_way()
         labels_before = len(p.ax.texts)
@@ -315,9 +338,13 @@ class Renderer:
         return self._export(p)
 
     def _render_galactic(self, request: RenderRequest) -> bytes:
-        """All-sky map in galactic coordinates (Mollweide). No observer needed."""
+        """All-sky map in galactic coordinates (Mollweide). Doesn't need an
+        observer for its projection, but planets/Moon/Sun positions still
+        depend on time (and, marginally, location) — see
+        _solar_system_observer."""
         resolution = self._resolution_for(request)
         p = GalaxyPlot(
+            observer=self._solar_system_observer(request),
             style=self._style_for(request),
             resolution=resolution,
             scale=self._scale_for(resolution),
@@ -328,6 +355,9 @@ class Renderer:
             where_labels=[_.magnitude < 2.1],
         )
         self._plot_dsos(p)
+        p.planets()
+        p.moon()  # marker icon; see _render_full for why not true_size
+        p.sun()
         p.milky_way()
         p.galactic_equator()
         p.constellation_labels()
@@ -356,6 +386,9 @@ class Renderer:
         p.open_clusters(where=[(_.magnitude < 12) | (_.magnitude.isnull())], label_fn=_dso_label)
         p.galaxies(where=[(_.magnitude < 14) | (_.magnitude.isnull())], label_fn=_dso_label)
         p.nebula(where=[(_.magnitude < 14) | (_.magnitude.isnull())], label_fn=_dso_label)
+        p.planets(true_size=True)
+        p.moon(true_size=True, show_phase=True)
+        p.sun(true_size=True)
         p.info()
         return self._export(p)
 
