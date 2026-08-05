@@ -170,18 +170,19 @@ def test_optic_happy_path():
     assert req.optic["type"] == "binoculars"
 
 
-def test_optic_rejects_object_name_target():
-    # Object-name lookup (e.g. "M31") is not implemented yet; reject at parse
-    # time rather than acknowledging with "queued" and failing later in the renderer.
-    with pytest.raises(ValidationError) as exc:
-        parse_command(_optic_payload(target={"object": "M31"}))
-    assert "object-name lookup is not supported" in str(exc.value)
+def test_optic_accepts_object_name_target():
+    # Resolving target.object (e.g. "M31") happens in the renderer, since it
+    # needs the loaded catalogs — parse_command just accepts it here and lets
+    # an unresolvable name surface as an `error` reply after `queued`.
+    req = parse_command(_optic_payload(target={"object": "M31"}))
+    assert req.target == {"object": "M31"}
 
 
 def test_optic_requires_target():
     with pytest.raises(ValidationError) as exc:
         parse_command(_optic_payload(target={}))
-    assert "requires target.ra and target.dec" in str(exc.value)
+    assert "requires target.ra/target.dec" in str(exc.value)
+    assert "target.object" in str(exc.value)
 
 
 def test_optic_requires_optic_type():

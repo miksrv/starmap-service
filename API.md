@@ -41,13 +41,15 @@ older callers.
     "datetime": "2026-06-17T22:00:00"
   },
 
-  "target": { "ra": 10.68, "dec": 41.27 },
+  "target": { "object": "M 31" },
 
   "optic": { "type": "binoculars", "magnification": 10, "fov": 65 },
 
   "options": { "style": "BLUE_NIGHT", "resolution": 2600, "projection": "miller" }
 }
 ```
+
+`target` also accepts explicit coordinates instead of a name: `{ "ra": 10.68, "dec": 41.27 }`.
 
 ### Fields
 
@@ -57,8 +59,8 @@ older callers.
 | `map_type`              | string | chart type (see below); defaults to `render.default_map_type`       |
 | `observer.lat` / `.lon` | number | observer coordinates in degrees; required for `zenith`/`horizon`/`optic` |
 | `observer.datetime`     | string | ISO 8601; **defaults to the service's current system time**         |
-| `target.ra` / `.dec`    | number | target coordinates in degrees; **required** for `optic`             |
-| `target.object`         | string | *(not implemented yet)* object name (e.g. `M31`); currently rejected — use `ra`/`dec` |
+| `target.ra` / `.dec`    | number | target coordinates in degrees; **required for `optic`** unless `target.object` is given |
+| `target.object`         | string | object name — catalog number (`M31`, `NGC224`, `IC1396`, any spacing/case), Sun/Moon/planet name, star proper name (`Vega`), or DSO common name (`Andromeda Galaxy`); resolved server-side, see [Object name resolution](#object-name-resolution-targetobject) |
 | `optic.type`            | string | `binoculars` / `telescope` / `refractor` / `reflector` / `camera`   |
 | `options.*`             | object | optional per-request overrides of `config.yaml` (style, resolution…)|
 
@@ -92,6 +94,24 @@ For `map_type: optic`, the `optic` block selects the instrument and its paramete
 | `refractor`             | same as `telescope` (image inverted, assumes a star diagonal)        |
 | `reflector`             | same as `telescope` (image rotated 180°)                             |
 | `camera`                | `sensor_width`, `sensor_height`, `lens_focal_length` (mm); optional `rotation` (deg) |
+
+### Object name resolution (`target.object`)
+
+The bot should forward whatever the user typed, untouched — no parsing or normalization on the
+bot's side. The service normalizes it (strips spaces/underscores/hyphens, case-insensitive) and
+tries, in order:
+
+1. **Catalog number** — `M31`, `M 31`, `M_31`, `m-31`, `NGC224`, `ngc 224`, `IC1396`, `ic_1396` all
+   resolve to the same object.
+2. **Sun** / **Moon** (case-insensitive).
+3. **Planet** name (`Jupiter`, `Saturn`, …), case-insensitive.
+4. **Star** proper name (`Vega`, `Sirius`, `Polaris`, …), case-insensitive exact match.
+5. **DSO common name** (`Andromeda Galaxy`, `Orion Nebula`, …), case-insensitive substring match.
+
+If nothing matches, the service replies with an `error` (see the error catalog below) — this can
+only be detected at render time (after the catalogs are queried), so it arrives **after** the
+`queued` reply, same as e.g. "target below horizon". `target.ra`/`target.dec` skip all of this and
+are used as-is, so prefer them if the bot already has coordinates (e.g. from a previous resolution).
 
 ### Options (`options`)
 
@@ -200,7 +220,8 @@ Any problem — validation, queue full, or an unexpected render failure — is r
 | Coordinates required but missing                       | `map_type 'zenith' requires observer coordinates (observer.lat …)` |
 | Coordinates not numeric / out of range                 | `observer.lat must be between -90 and 90`                          |
 | Bad datetime format                                    | `datetime must be ISO 8601, e.g. 2026-06-17T22:00:00`              |
-| `optic` without a target (or only `target.object`)     | `map_type 'optic' requires target.ra and target.dec (degrees); object-name lookup is not supported yet` |
+| `optic` without a target                               | `map_type 'optic' requires target.ra/target.dec (degrees) or target.object (e.g. 'M31')` |
+| `optic` `target.object` doesn't resolve to anything    | `object 'Foo' not found; try a catalog number (M31, NGC224, IC1396), the Sun/Moon/a planet, a star name (Vega), or a common DSO name (Andromeda Galaxy)` |
 | `optic` without an optic definition                    | `map_type 'optic' requires an 'optic' definition …`                |
 | `optic` with an unknown optic type or missing field    | `unknown optic.type 'x'…` / `optic.fov is required for optic.type…`|
 | `optic` target below the horizon at the given time     | `Target is below horizon at specified time/location.`              |
@@ -241,9 +262,10 @@ Notes:
 
 - `horizon` accepts `options.direction` (one of `N, NE, E, SE, S, SW, W, NW`; default `S`) to choose
   which 180°-wide swath of the horizon to show.
-- `optic` currently requires explicit `target.ra` / `target.dec` (degrees); resolving an object name
-  like `M31` to coordinates is not wired up yet. If the target is below the horizon at the given
-  time/place, or the field of view is too wide (> 20°), the service replies with an `error`.
+- `optic` accepts either explicit `target.ra`/`target.dec` (degrees) or `target.object` (a name,
+  resolved server-side — see [Object name resolution](#object-name-resolution-targetobject)). If the
+  target is below the horizon at the given time/place, or the field of view is too wide (> 20°), the
+  service replies with an `error`.
 
 ---
 

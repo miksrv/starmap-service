@@ -96,26 +96,64 @@ def test_build_optic_non_numeric_field():
 # _target_radec
 # ---------------------------------------------------------------------------
 def test_target_radec_from_coords():
-    ra, dec = Renderer._target_radec(_req(target={"ra": 10.5, "dec": 41.2}))
+    ra, dec = Renderer()._target_radec(_req(target={"ra": 10.5, "dec": 41.2}))
     assert ra == pytest.approx(10.5)
     assert dec == pytest.approx(41.2)
 
 
 def test_target_radec_non_numeric():
     with pytest.raises(ValidationError) as exc:
-        Renderer._target_radec(_req(target={"ra": "x", "dec": "y"}))
+        Renderer()._target_radec(_req(target={"ra": "x", "dec": "y"}))
     assert "must be numbers" in str(exc.value)
-
-
-def test_target_radec_object_name_not_supported():
-    with pytest.raises(ValidationError) as exc:
-        Renderer._target_radec(_req(target={"object": "M31"}))
-    assert "object-name lookup is not supported" in str(exc.value)
 
 
 def test_target_radec_empty():
     with pytest.raises(ValidationError):
-        Renderer._target_radec(_req(target={}))
+        Renderer()._target_radec(_req(target={}))
+
+
+# ---------------------------------------------------------------------------
+# _resolve_object_name — catalog-number parsing (M31 / "M 31" / "M_31" / ngc-224 / IC1396).
+# Real DSO/Star/Planet/Sun/Moon lookups need the actual catalogs (see
+# tests/conftest.py's stub), so under the stub these all resolve to "not found" —
+# what we're testing here is that every spelling gets recognized and dispatched
+# to the same lookup, not the catalog data itself.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("spelling", ["M31", "M 31", "M_31", "m-31"])
+def test_resolve_object_name_messier_spellings(spelling):
+    with pytest.raises(ValidationError) as exc:
+        Renderer._resolve_object_name(spelling, observer=None)
+    assert "not found" in str(exc.value)
+    assert "M31" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "spelling,expected",
+    [
+        ("NGC224", "NGC224"),
+        ("ngc 224", "NGC224"),
+        ("IC1396", "IC1396"),
+        ("ic_1396", "IC1396"),
+    ],
+)
+def test_resolve_object_name_ngc_ic_spellings(spelling, expected):
+    with pytest.raises(ValidationError) as exc:
+        Renderer._resolve_object_name(spelling, observer=None)
+    assert expected in str(exc.value)
+
+
+def test_resolve_object_name_empty_rejected():
+    with pytest.raises(ValidationError) as exc:
+        Renderer._resolve_object_name("   ", observer=None)
+    assert "must not be empty" in str(exc.value)
+
+
+def test_resolve_object_name_common_name_not_found_under_stub():
+    # Not a catalog number, not "sun"/"moon" — falls through to the
+    # Planet/Star/common-name lookups, all of which miss under the stub.
+    with pytest.raises(ValidationError) as exc:
+        Renderer._resolve_object_name("Andromeda Galaxy", observer=None)
+    assert "not found" in str(exc.value)
 
 
 # ---------------------------------------------------------------------------

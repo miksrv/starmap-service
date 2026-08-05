@@ -10,20 +10,26 @@ Implemented map types: `full`, `galactic`, `zenith`, `horizon`, `optic`.
 """
 
 import logging
+import re
 from io import BytesIO
 
 from starplot import (
+    DSO,
     Binoculars,
     Camera,
     GalaxyPlot,
     HorizonPlot,
     MapPlot,
     Miller,
+    Moon,
     Observer,
     OpticPlot,
+    Planet,
     Reflector,
     Refractor,
     Scope,
+    Star,
+    Sun,
     ZenithPlot,
     _,
     settings,
@@ -386,24 +392,78 @@ class Renderer:
         p.open_clusters(where=[(_.magnitude < 12) | (_.magnitude.isnull())], label_fn=_dso_label)
         p.galaxies(where=[(_.magnitude < 14) | (_.magnitude.isnull())], label_fn=_dso_label)
         p.nebula(where=[(_.magnitude < 14) | (_.magnitude.isnull())], label_fn=_dso_label)
-        p.planets(true_size=True)
+        # NOTE: planets() with true_size=True crashes here (shapely
+        # "GEOSException: getX called on empty Point" at export time) — with
+        # 8 planets plotted regardless of in_bounds, at least one ends up far
+        # outside the optic's narrow FOV, and its true-size circle (a few
+        # arcsec across) degenerates. Moon/Sun (single objects) don't hit
+        # this, so true_size stays for them; see ROADMAP.md for the trade-off.
+        p.planets()
         p.moon(true_size=True, show_phase=True)
         p.sun(true_size=True)
         p.info()
         return self._export(p)
 
-    @staticmethod
-    def _target_radec(request: RenderRequest):
+    def _target_radec(self, request: RenderRequest):
         target = request.target
         if target.get("ra") is not None and target.get("dec") is not None:
             try:
                 return float(target["ra"]), float(target["dec"])
             except (TypeError, ValueError):
                 raise ValidationError("target.ra and target.dec must be numbers (degrees)")
-        # Resolving an object name (e.g. "M31") to coordinates is not wired up yet.
+        object_name = target.get("object")
+        if object_name:
+            return self._resolve_object_name(str(object_name), self._observer(request))
         raise ValidationError(
-            "optic charts currently require target.ra and target.dec (degrees); "
-            "object-name lookup is not supported yet"
+            "optic charts require target.ra/target.dec (degrees) or target.object (e.g. 'M31')"
+        )
+
+    # Catalog number after stripping spaces/underscores/hyphens: M31, NGC224, IC1396.
+    _CATALOG_NUMBER_RE = re.compile(r"^(M|NGC|IC)(\d[\dA-Z]*)$")
+    _CATALOG_FIELD = {"M": "m", "NGC": "ngc", "IC": "ic"}
+
+    @classmethod
+    def _resolve_object_name(cls, name: str, observer: Observer):
+        """Resolve a bot-supplied object name to RA/Dec, in whatever form a user
+        types it: catalog number ("M31", "M 31", "M_31", "ngc-224", "IC1396"),
+        Sun/Moon/planet name, star proper name (e.g. "Vega"), or DSO common
+        name (e.g. "Andromeda Galaxy"). Raises ValidationError if nothing matches."""
+        cleaned = name.strip()
+        if not cleaned:
+            raise ValidationError("target.object must not be empty")
+
+        collapsed = re.sub(r"[\s_-]", "", cleaned).upper()
+        match = cls._CATALOG_NUMBER_RE.match(collapsed)
+        if match:
+            prefix, number = match.groups()
+            dso = DSO.get(**{cls._CATALOG_FIELD[prefix]: number})
+            if dso:
+                return dso.ra, dso.dec
+            raise ValidationError(f"object '{name}' not found (no {prefix}{number} in the DSO catalog)")
+
+        lowered = cleaned.lower()
+        if lowered == "sun":
+            s = Sun.get(observer=observer)
+            return s.ra, s.dec
+        if lowered == "moon":
+            m = Moon.get(observer=observer)
+            return m.ra, m.dec
+
+        planet = Planet.get(name=cleaned, observer=observer)
+        if planet:
+            return planet.ra, planet.dec
+
+        stars = Star.find(where=[_.name.lower() == lowered])
+        if stars:
+            return stars[0].ra, stars[0].dec
+
+        dsos = DSO.find(where=[_.common_names.lower().contains(lowered)])
+        if dsos:
+            return dsos[0].ra, dsos[0].dec
+
+        raise ValidationError(
+            f"object '{name}' not found; try a catalog number (M31, NGC224, IC1396), "
+            "the Sun/Moon/a planet, a star name (Vega), or a common DSO name (Andromeda Galaxy)"
         )
 
     @staticmethod

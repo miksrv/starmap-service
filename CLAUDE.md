@@ -112,7 +112,9 @@ starplot API notes: `Observer(dt=<tz-aware>, lat, lon)` — the kwarg is `dt` an
 timezone-aware (parse_command guarantees this). Optic classes (`Binoculars`, `Scope`, `Refractor`,
 `Reflector`, `Camera`) come from `starplot`. `OpticPlot` raises `ValueError` if the target is below
 the horizon or the FOV > 20°; the renderer converts these to `ValidationError` so the bot gets a
-clean message. `optic` currently needs explicit `target.ra`/`target.dec` (object-name lookup TODO).
+clean message. `optic` accepts `target.ra`/`target.dec` directly, or `target.object` (a name —
+catalog number, Sun/Moon/planet, star, or DSO common name) resolved via `_resolve_object_name`
+against the already-loaded catalogs (`DSO.get`/`.find`, `Star.find`, `Planet.get`).
 
 ## Rendering engine: starplot
 
@@ -190,4 +192,4 @@ lifetime of the service.
 `ROADMAP.md` is the original pre-implementation plan; most of its checklist is now done even where
 the checkboxes weren't updated (config, the MQTT service, deployment, tests, docs), so treat unchecked
 items there as needing re-verification rather than as an accurate to-do list. The concrete work still
-open is: object-name lookup for `optic` targets, and Russian label localization.
+open is: Russian label localization.

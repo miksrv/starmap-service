@@ -49,12 +49,68 @@ def _install_starplot_stub() -> None:
     ):
         setattr(starplot, _name, type(_name, (_Recorder,), {}))
 
+    class _ClassAttrRecorder(type):
+        """Metaclass so e.g. DSO.get(...) (a *class*-level call, no instance)
+        resolves to a no-op returning None, same spirit as _Recorder above."""
+
+        def __getattr__(cls, _name):
+            return lambda *a, **k: None
+
+    # Catalog model classes (src.renderer._resolve_object_name): only called as
+    # classmethods (DSO.get/.find, Star.find, Planet.get, Sun.get, Moon.get),
+    # never instantiated — hence the metaclass instead of _Recorder.
+    for _name in ("DSO", "Star", "Planet", "Sun", "Moon"):
+        setattr(starplot, _name, _ClassAttrRecorder(_name, (), {}))
+
     class _Settings:
         data_path = None
         language = None
 
     starplot.settings = _Settings()
-    starplot._ = _Recorder()  # the ibis column placeholder; only used inside renders
+
+    class _DeferredExprStub:
+        """Stand-in for ibis's `_` deferred column expression. Every attribute
+        access, call, and comparison returns another instance of itself, so
+        chains like `_.name.lower() == x` or `(_.magnitude < 8) | _.magnitude.isnull()`
+        build without error. The resulting "expression" is never actually
+        evaluated: the catalog classmethods that consume it (DSO.find,
+        Star.find, `where=[...]` on p.stars/p.nebula/etc.) are themselves
+        no-ops under this stub."""
+
+        def __getattr__(self, _name):
+            return self
+
+        def __call__(self, *args, **kwargs):
+            return self
+
+        def __eq__(self, other):
+            return self
+
+        def __ne__(self, other):
+            return self
+
+        def __lt__(self, other):
+            return self
+
+        def __le__(self, other):
+            return self
+
+        def __gt__(self, other):
+            return self
+
+        def __ge__(self, other):
+            return self
+
+        def __or__(self, other):
+            return self
+
+        def __and__(self, other):
+            return self
+
+        def __invert__(self):
+            return self
+
+    starplot._ = _DeferredExprStub()  # the ibis column placeholder; only used inside renders
 
     styles = types.ModuleType("starplot.styles")
 
