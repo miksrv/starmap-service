@@ -123,6 +123,15 @@ class Renderer:
             return config.RESOLUTION
 
     @staticmethod
+    def _scale_for(resolution: int) -> float:
+        # All marker/font sizing (the manual font_size overrides in _plot_dsos,
+        # constellation_labels, etc.) was tuned for a 6000px map at scale 0.8.
+        # Passing this explicit scale (instead of starplot's own autoscale,
+        # which divides by its unrelated DEFAULT_RESOLUTION=4096) keeps every
+        # map_type visually consistent with `full` at any configured resolution.
+        return 0.8 * resolution / _FULL_REFERENCE_RESOLUTION
+
+    @staticmethod
     def _observer(request: RenderRequest) -> Observer:
         # request.dt is always timezone-aware (parse_command guarantees it),
         # which is what starplot's Observer requires.
@@ -163,10 +172,6 @@ class Renderer:
     def _render_full(self, request: RenderRequest) -> bytes:
         """All-sky RA/DEC map (the original main.py behavior, parameterized)."""
         resolution = self._resolution_for(request)
-        # The full-sky style (fonts, markers, the font_size overrides below) was
-        # tuned for a 6000px map at scale 0.8. Keep that ratio at any resolution
-        # so labels/objects don't look oversized on smaller renders.
-        scale = 0.8 * resolution / _FULL_REFERENCE_RESOLUTION
         p = MapPlot(
             projection=Miller(),
             ra_min=0,
@@ -175,7 +180,7 @@ class Renderer:
             dec_max=80,
             style=self._style_for(request),
             resolution=resolution,
-            scale=scale,
+            scale=self._scale_for(resolution),
         )
         p.gridlines()
         p.constellations()
@@ -192,11 +197,12 @@ class Renderer:
 
     def _render_zenith(self, request: RenderRequest) -> bytes:
         """Dome of sky overhead at the observer's time and place."""
+        resolution = self._resolution_for(request)
         p = ZenithPlot(
             observer=self._observer(request),
             style=self._style_for(request),
-            resolution=self._resolution_for(request),
-            autoscale=True,
+            resolution=resolution,
+            scale=self._scale_for(resolution),
         )
         p.constellations()
         p.stars(
@@ -217,14 +223,15 @@ class Renderer:
         center = _DIRECTION_AZIMUTH.get(direction, 180)
         azimuth = (center - 90, center + 90)  # 180-deg wide swath (starplot's max)
         altitude = (0, 70)
+        resolution = self._resolution_for(request)
 
         p = HorizonPlot(
             altitude=altitude,
             azimuth=azimuth,
             observer=self._observer(request),
             style=self._style_for(request),
-            resolution=self._resolution_for(request),
-            autoscale=True,
+            resolution=resolution,
+            scale=self._scale_for(resolution),
         )
         p.constellations()
         p.stars(
@@ -238,10 +245,11 @@ class Renderer:
 
     def _render_galactic(self, request: RenderRequest) -> bytes:
         """All-sky map in galactic coordinates (Mollweide). No observer needed."""
+        resolution = self._resolution_for(request)
         p = GalaxyPlot(
             style=self._style_for(request),
-            resolution=self._resolution_for(request),
-            autoscale=True,
+            resolution=resolution,
+            scale=self._scale_for(resolution),
         )
         p.constellations()
         p.stars(
